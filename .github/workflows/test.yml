@@ -35,7 +35,6 @@ jobs:
           name: decoder-exe
           path: decoder.exe
 
-          
       - name: Run encoder
         run: ./encoder.exe test_input_simple.txt test_codebook-simple.csv test_encoded-simple.bin > test_encoder-simple.log 2>&1
 
