@@ -60,7 +60,7 @@ jobs:
           path: test_encoder-complex.log
 
       - name: Run decoder
-        run: ./decoder.exe output.txt codebook.csv encoded.bin
+        run: ./decoder.exe test_output-complex.txt test_codebook-complex.csv test_encoded-complex.bin > test_decoder-complex.log 2>&1
 
       - name: Upload output-complex.txt
         uses: actions/upload-artifact@v4
