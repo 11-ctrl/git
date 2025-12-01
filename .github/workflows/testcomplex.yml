@@ -15,7 +15,7 @@ jobs:
       # 步驟 2: 編譯 C 語言程式
       # 使用 GCC 編譯 main.c，輸出名為 hello_c_app 的可執行檔
       - name: Compile encoder
-        run: gcc mini_prj_3_encoder_411286029.c -o encoder.exe -lm
+        run: gcc encoder.c -o encoder.exe -lm
         
       # 步驟 3: 運行並驗證程式（直接執行程式）
       - name: Upload encoder
@@ -27,7 +27,7 @@ jobs:
       # 步驟 4: 上傳建置成品（可選）
       # 將編譯好的可執行檔儲存為 Artifact，供下載
       - name: Compile decoder
-        run: gcc mini_prj_3_decoder_411286029.c -o decoder.exe -lm
+        run: gcc decoder.c -o decoder.exe -lm
 
       - name: Upload decoder
         uses: actions/upload-artifact@v4
@@ -39,28 +39,40 @@ jobs:
         run: curl -o test_input_complex.txt https://sherlock-holm.es/stories/plain-text/cano.txt
 
       - name: Run encoder
-        run: ./encoder.exe test_input_complex.txt codebook.csv encoded.bin
+        run: ./encoder.exe test_input_complex.txt test_codebook-complex.csv test_encoded-complex.bin > test_encoder-complex.log 2>&1
 
-      - name: Upload encoded-simple.bin
+      - name: Upload encoded-complex.bin
         uses: actions/upload-artifact@v4
         with:
           name: encoded-complex
-          path: encoded.bin
+          path: test_encoded-complex.bin
 
-      - name: Upload codebook-simple.bin
+      - name: Upload codebook-complex.csv
         uses: actions/upload-artifact@v4
         with:
           name: codebook-complex
-          path: codebook.csv
+          path: test_codebook-complex.csv
+
+      - name: Upload encoder-complex.log
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoder-log-complex
+          path: test_encoder-complex.log
 
       - name: Run decoder
         run: ./decoder.exe output.txt codebook.csv encoded.bin
 
-      - name: Upload output-simple.txt
+      - name: Upload output-complex.txt
         uses: actions/upload-artifact@v4
         with:
           name: output-complex
-          path: output.txt
+          path: test_output-complex.txt
 
+      - name: Upload decoder-complex.log
+        uses: actions/upload-artifact@v4
+        with:
+          name: decoder-log-complex
+          path: test_encoder-complex.log
+          
       - name: Compare input and output
-        run: diff -a test_input_complex.txt output.txt
+        run: diff -a test_input_complex.txt test_output-complex.txt

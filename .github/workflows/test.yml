@@ -15,7 +15,7 @@ jobs:
       # 步驟 2: 編譯 C 語言程式
       # 使用 GCC 編譯 main.c，輸出名為 hello_c_app 的可執行檔
       - name: Compile encoder
-        run: gcc mini_prj_3_encoder_411286029.c -o encoder.exe -lm
+        run: gcc encoder.c -o encoder.exe -lm
         
       # 步驟 3: 運行並驗證程式（直接執行程式）
       - name: Upload encoder
@@ -27,7 +27,7 @@ jobs:
       # 步驟 4: 上傳建置成品（可選）
       # 將編譯好的可執行檔儲存為 Artifact，供下載
       - name: Compile decoder
-        run: gcc mini_prj_3_decoder_411286029.c -o decoder.exe -lm
+        run: gcc decoder.c -o decoder.exe -lm
 
       - name: Upload decoder
         uses: actions/upload-artifact@v4
@@ -36,28 +36,40 @@ jobs:
           path: decoder.exe
 
       - name: Run encoder
-        run: ./encoder.exe input.txt codebook.csv encoded.bin
+        run: ./encoder.exe test_input_simple.txt test_codebook-simple.csv test_encoded-simple.bin > test_encoder-simple.log 2>&1
 
       - name: Upload encoded-simple.bin
         uses: actions/upload-artifact@v4
         with:
           name: encoded-simple
-          path: encoded.bin
+          path: test_encoded-simple.bin
 
       - name: Upload codebook-simple.bin
         uses: actions/upload-artifact@v4
         with:
           name: codebook-simple
-          path: codebook.csv
+          path: test_codebook-simple.csv
 
+      - name: Upload encoder-simple.log
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoder-log-simple
+          path: test_encoder-simple.log
+          
       - name: Run decoder
-        run: ./decoder.exe output.txt codebook.csv encoded.bin
+        run: ./decoder.exe test_output-simple.txt test_codebook-simple.csv test_encoded-simple.bin > test_decoder-simple.log 2>&1
 
       - name: Upload output-simple.txt
         uses: actions/upload-artifact@v4
         with:
           name: output-simple
-          path: output.txt
+          path: test_output-simple.txt
+
+      - name: Upload decoder-simple.log
+        uses: actions/upload-artifact@v4
+        with:
+          name: decoder-log-simple
+          path: test_decoder-simple.log
 
       - name: Compare input and output
-        run: diff -a input.txt output.txt
+        run: diff -a test_input_simple.txt test_output-simple.txt
