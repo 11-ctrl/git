@@ -1,144 +1,315 @@
-// mini_prj_3_encoder_fixed.c
-//test git 002
-
+//this is for encoder
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <string.h>
-#include <math.h>
-#include <inttypes.h>
 
-#define MAX_SYMBOLS 256
+#define BYTE_MAX     256  //maximum one byte number
+#define MAX_SYMB     3000  //maximux symbol type
 
-// ---------- CSV Safe Symbol Representation ----------
-static void symbol_to_csv_repr(unsigned char c, char *out, size_t outsz) {
-    if (c == '\"') { snprintf(out, outsz, "\"\""); return; } // CSV quote escape
-    if (c == '\n') { snprintf(out, outsz, "\\n"); return; }
-    if (c == '\r') { snprintf(out, outsz, "\\r"); return; }
-    if (c == '\t') { snprintf(out, outsz, "\\t"); return; }
-    if (c == '\\') { snprintf(out, outsz, "\\\\"); return; }
-    if (c >= 32 && c <= 126) snprintf(out, outsz, "%c", c);
-    else snprintf(out, outsz, "\\x%02X", c);
-}
-
-// ---------- Bit Writer ----------
 typedef struct {
-    FILE *f;
-    unsigned char cur;
-    int bits_filled;
-} BitWriter;
+    unsigned char chr[4];     //bytes of symbol
+    int useLen;               //size: 1~4 bytes
+    int count;                //number of this symbol
+    double prob;              //probability 
+    char code[8];             //fixed encode
+} Symb;
 
-static BitWriter *bitwriter_open(FILE *f) {
-    BitWriter *bw = malloc(sizeof(BitWriter));
-    bw->f = f; bw->cur = 0; bw->bits_filled = 0;
-    return bw;
+unsigned char byteBuffer = 0; // byte buffer for output (8 bits)
+int bitInBuff = 0; //number of bits in buffer
+
+//------------------ utf-8 decoding ------------------ 
+static int utf8_len(unsigned char b0){  //use first byte to check UTF-8 using length
+    if ((b0 & 0x80)==0x00) return 1; //0xxxxxxx
+    if ((b0 & 0xE0)==0xC0) return 2; //110xxxxx
+    if ((b0 & 0xF0)==0xE0) return 3; //1110xxxx
+    if ((b0 & 0xF8)==0xF0) return 4; //11110xxx
+    return 0;  
+}
+static int is_utf8_follow(unsigned char b){ //check is UTF-8 follow byte legal (10xxxxxx)
+    return (b & 0xC0)==0x80; //10xxxxxx
 }
 
-static void bitwriter_write_bits(BitWriter *bw, uint32_t bits, int nbits) {
-    for (int i = nbits - 1; i >= 0; --i) {
-        int bit = (bits >> i) & 1;
-        bw->cur = (bw->cur << 1) | bit;
-        bw->bits_filled++;
-        if (bw->bits_filled == 8) {
-            fwrite(&bw->cur, 1, 1, bw->f);
-            bw->cur = 0; bw->bits_filled = 0;
+//------------------ big-5 decoding ------------------ 
+static int big5_len(unsigned char b0){
+    if (b0 <= 0x7F) return 1;                 // first byte < 127 ->ASCII
+    if (b0 >= 0x81 && b0 <= 0xFE) return 2;   // first byte is big-5 high byte 0x81-0xFE
+    return 1;                                 
+}
+static int is_big5_follow(unsigned char b1){
+    // big5 low byte 0x40-0x7E , 0xA1-0xFE
+    return ( (b1 >= 0x40 && b1 <= 0x7E) || (b1 >= 0xA1 && b1 <= 0xFE) ); //check is big-5 rule
+}
+
+// -------------- qsort compare function for codebook --------------
+static int cmp_codebook(const void *a, const void *b){
+    const Symb *x = *(const Symb**)a; 
+    const Symb *y = *(const Symb**)b;
+    // Primary key: symbol count (ascending)
+    if(x->count != y->count) 
+        return x->count - y->count;
+    // Secondary key: symbol byte length (ascending)
+    if(x->useLen != y->useLen) 
+        return x->useLen - y->useLen;
+    return memcmp(x->chr, y->chr, x->useLen); // Tertiary key: byte index (ascending)
+}
+
+// -------------- convert integer to 7-bit binary string --------------
+static void int_to_bin(int val, char *out_str) {
+    // val is n'th code
+    out_str[7] = '\0'; //character ending
+    for (int i = 6; i >= 0; i--) {
+        out_str[i] = (val & 1) ? '1' : '0'; // val LSB to '1' or '0' from right to left
+        val >>= 1; // shift val right 
+    }
+}
+
+// -------------- write char to codebook csv file --------------
+static void csv_char(const unsigned char *s, int len, FILE *fp){   
+    if (len==1 && s[0]=='\r'){ fputs("\"\\r\"",fp); return; }
+    if (len==1 && s[0]=='\n'){ fputs("\"\\n\"",fp); return; }
+    if (len==1 && s[0]=='\t'){ fputs("\"\\t\"",fp); return; }
+    fputc('"',fp);
+    for(int i=0;i<len;i++){
+        if (s[i]=='"') fputc('"',fp); // escape double quote
+        fputc(s[i],fp); // output symbol
+    }
+    fputc('"',fp);
+}
+// -------------- write code to output file --------------
+static void write_code(const char *code, int len, FILE *fp){
+    for (int k = 0; k < len; k++) {
+        // char '0'(48) or '1'(49) to bit 0 or 1
+        byteBuffer = (byteBuffer << 1) | (code[k] - '0'); // add 0 or 1 to buffer and shift left
+        bitInBuff++;
+
+        // when buffer is full (8 bits), write to file
+        if (bitInBuff == 8) {
+            //fprintf(stderr, "DEBUG [Data]: 0x%02X\n", g_bitBuffer); // print debug info
+            fputc(byteBuffer, fp);
+            bitInBuff = 0;
+            byteBuffer = 0;
         }
     }
-}
+} 
 
-static void bitwriter_close(BitWriter *bw) {
-    if (bw->bits_filled > 0) {
-        bw->cur <<= (8 - bw->bits_filled);
-        fwrite(&bw->cur, 1, 1, bw->f);
-    }
-    free(bw);
-}
-
-// ---------- Symbol Counting ----------
-typedef struct {
-    unsigned char sym;
-    uint64_t count;
-} SymCount;
-
-static int cmp_symcount(const void *a, const void *b) {
-    const SymCount *A = a, *B = b;
-    if (A->count < B->count) return -1;
-    if (A->count > B->count) return 1;
-    return (int)A->sym - (int)B->sym;
-}
-
-static int ceil_log2_u32(uint32_t x) {
-    if (x <= 1) return 1;
-    int l = 0; x -= 1;
-    while (x > 0) { x >>= 1; l++; }
-    return l;
-}
-
-// ---------- MAIN ----------
-int main(int argc, char **argv) {
+int main(int argc, char *argv[]) {
+    // check argument count
     if (argc != 4) {
-        fprintf(stderr, "Usage: %s in_fn cb_fn enc_fn\n", argv[0]);
-        return 1;
+        fprintf(stderr, "usage: %s in_fn cb_fn enc_fn\n", argv[0]);
+        return 1; 
+    }
+    // open files
+    // Read Binary
+    FILE *fin = fopen(argv[1], "rb"); 
+    if (fin == NULL) { perror(argv[1]); return 1; }
+    // Write
+    FILE *fcsv = fopen(argv[2], "w"); 
+    if (fcsv == NULL) { perror(argv[2]); return 1; }
+    // Write Binary
+    FILE *fout = fopen(argv[3], "wb"); 
+    if (fout == NULL) { perror(argv[3]); return 1; }
+
+    // === symbol statics ===
+    Symb symb[MAX_SYMB]={0};
+    
+    // initial ascii symbols
+    for(int i=0;i<=0x7F;i++){ 
+        symb[i].chr[0]=(unsigned char)i; 
+        symb[i].useLen=1; 
+        symb[i].count=0; // start from zero
     }
 
-    const char *in_fn = argv[1];
-    const char *cb_fn = argv[2];
-    const char *enc_fn = argv[3];
+    int used = BYTE_MAX;  // used symbol types
+    int total = 0;        // total symbol count
+    int c; // a byte read from file
 
-    FILE *fin = fopen(in_fn, "rb");
-    if (!fin) { perror("fopen input"); return 1; }
+    // ---------------------- statistic symbol --------------------
+    while((c=fgetc(fin))!=EOF){
+        unsigned char b0 = (unsigned char)c; 
+        // handle ascii 0~127
+        if(b0 <= 0x7F){ 
+            symb[b0].count++;
+            total++;
+            continue; // next char
+        }
 
-    uint64_t counts[MAX_SYMBOLS] = {0}, total = 0;
-    int c;
-    while ((c = fgetc(fin)) != EOF) {
-        counts[(unsigned char)c]++;
-        total++;
+        // handle multibyte symbol (utf-8 / big5)
+        int symbLen=1; 
+        unsigned char tmp[4]; //store symbol following bytes
+        tmp[0]=b0; // first byte
+        int uLen=0; // symbol use length (bytes)
+        int read=1, ok=0; 
+
+        // try utf-8
+        uLen = utf8_len(b0); // check is legal utf-8 first byte & length
+        if(uLen > 1){
+            ok = 1;
+            for(int i=1;i<uLen;i++){
+                int d=fgetc(fin);
+                if(d==EOF){ ok=0; break; } // end of file break
+                tmp[read++]=(unsigned char)d; // store symbol in tmp[] (2~4 bytes)
+                if(!is_utf8_follow(tmp[read-1])){ ok=0; break; } // illegal following utf-8 byte
+            }
+        }
+        if (ok){ 
+            symbLen = uLen; // save utf-8 length
+        } else { 
+            for (int j=read-1;j>=1; --j) ungetc(tmp[j], fin); // push back to b0
+        }
+
+        // try big-5
+        if (symbLen == 1){  // check not utf-8 (symbLen unchanged)
+            uLen = big5_len(b0); // check is legal big-5 first byte & length
+            if (uLen == 2){ 
+                int d = fgetc(fin); // read following byte (second byte)
+                if (d != EOF && is_big5_follow((unsigned char)d)){ // legal big-5 follow byte
+                    tmp[1] = (unsigned char)d;
+                    symbLen = 2;   // big-5 always 2 bytes
+                } else {
+                    if (d != EOF) ungetc(d, fin); // push back to b0
+                }
+            }
+        }
+
+        // handle non ASCII, UTF-8, Big-5 symbols (128~255)
+        if (symbLen == 1){ // symbleLen unchanged -> unknown one byte symbol
+            if (symb[b0].useLen == 0){  // first time seen initialize
+                symb[b0].useLen = 1;
+                symb[b0].chr[0] = b0;
+            }
+            symb[b0].count++; // count this symbol 
+            total++; // count total symbols
+            continue;
+        }
+
+        // save multibyte symbol (utf-8 / big5)
+        int found=0;
+        for(int i=BYTE_MAX;i<used;i++){ 
+            // find existing symbol
+            if(symb[i].useLen==symbLen && memcmp(symb[i].chr,tmp,symbLen)==0){ 
+                symb[i].count++; // count this symbol
+                found=1; // mark found
+                total++;
+                break; 
+            }
+        }
+
+        // not found, add new symbol
+        if(!found){ 
+            // check symbol limit
+            if(used >= MAX_SYMB) { fprintf(stderr, "symbols are too many (%d)!\n", used); return 1; }
+            memcpy(symb[used].chr, tmp, symbLen); // copy symbol bytes
+            symb[used].useLen = symbLen; // set symbol length
+            symb[used].count = 1; // initialize count
+            total++; 
+            used++; // push back used symbol types
+        }
+    }
+
+    // ------------------ generate codebook -----------------------
+    // calculate probability & write to codebook file
+    Symb* out[MAX_SYMB]; // pointer array for qsort
+    int n=0; // number of used symbols
+    for(int i=0;i<used;i++) {
+        if(symb[i].count > 0){ // skip unused symbols
+            out[n] = &symb[i]; // store symb array address
+            n++; 
+        }
+    }
+    // count all symbols probability
+    for(int i=0;i<n;i++){
+        // check total > 0 and calculate probability
+        if(total > 0) out[i]->prob = (double)out[i]->count / (double)total;
+        else out[i]->prob = 0.0;
+    }
+    // sort by count descending
+    qsort(out, n, sizeof(Symb*), cmp_codebook); // sort function
+
+    // generate 7-bit(127) code and write to codebook.csv
+    char EOF_symb[8]; // for EOF symbol 
+    for(int i=0; i<n; i++){
+        // first symbol is 0000000 0000001 ...
+        int_to_bin(i, out[i]->code); // save 7-bit code
+        // write to codebook 
+        csv_char(out[i]->chr, out[i]->useLen, fcsv); // write symbol 
+        fprintf(fcsv, ",%d,%.7f,%s\n", out[i]->count, out[i]->prob, out[i]->code); //write count, prob, code
+    }
+    // add EOF symbol at the end
+    int_to_bin(n, EOF_symb); // EOF is n+1'th code
+    fprintf(fcsv, "\"EOF\",0,0.0000000,%s\n", EOF_symb); // write EOF to codebook
+    fclose(fcsv); // cb.csv
+
+    // ------------------ encode input file -----------------------
+    rewind(fin); // reset file pointer to beginning
+    while((c=fgetc(fin))!=EOF){
+        unsigned char b0 = (unsigned char)c; 
+        // 1. handle ascii 0~127
+        if(b0 <= 0x7F){ 
+            // count++ -> write_code
+            write_code(symb[b0].code, 7, fout); 
+            continue; 
+        }
+
+        // 2. handle multibyte symbol (utf-8 / big5) !! same as above !!
+        int symbLen=1; 
+        unsigned char tmp[4];
+        tmp[0]=b0;
+        int uLen=0;
+        int read=1, ok=0; 
+
+        uLen = utf8_len(b0); 
+        if(uLen > 1){
+            ok = 1;
+            for(int i=1;i<uLen;i++){
+                int d=fgetc(fin);
+                if(d==EOF){ ok=0; break; } 
+                tmp[read++]=(unsigned char)d; 
+                if(!is_utf8_follow(tmp[read-1])){ ok=0; break; } 
+            }
+        }
+        if (ok){ 
+            symbLen = uLen; 
+        } else { 
+            for (int j=read-1;j>=1; --j) ungetc(tmp[j], fin); 
+        }
+
+        if (symbLen == 1){ 
+            uLen = big5_len(b0); 
+            if (uLen == 2){
+                int d = fgetc(fin);
+                if (d != EOF && is_big5_follow((unsigned char)d)){ 
+                    tmp[1] = (unsigned char)d;
+                    symbLen = 2;   
+                } else {
+                    if (d != EOF) ungetc(d, fin); 
+                }
+            }
+        }
+
+        // handle non ASCII, UTF-8, Big-5 symbols (128~255)
+        if (symbLen == 1){ 
+            // count++ -> write_code
+            write_code(symb[b0].code, 7, fout); 
+            continue;
+        }
+
+        // 3. write multibyte symbol code
+        for(int i=BYTE_MAX;i<used;i++){ 
+            if(symb[i].useLen==symbLen && memcmp(symb[i].chr,tmp,symbLen)==0){ 
+                // count++ -> write_code
+                write_code(symb[i].code, 7, fout); 
+                break; 
+            }
+        }
+    }
+    // ---------------- end of input file -----------------------
+    write_code(EOF_symb, 7, fout);
+    if (bitInBuff> 0) {
+        // add 0 to fill last byte
+        byteBuffer <<= (8 - bitInBuff);
+        fputc(byteBuffer, fout); // last byte
     }
     fclose(fin);
-
-    SymCount syms[MAX_SYMBOLS];
-    int n = 0;
-    for (int i = 0; i < MAX_SYMBOLS; ++i)
-        if (counts[i] > 0) { syms[n].sym = i; syms[n].count = counts[i]; n++; }
-
-    int L = ceil_log2_u32(n + 1); // +1 for EOF
-    uint32_t eof_code = (1u << L) - 1;
-
-    qsort(syms, n, sizeof(SymCount), cmp_symcount);
-
-    FILE *fcb = fopen(cb_fn, "w");
-    if (!fcb) { perror("fopen codebook"); return 1; }
-
-    for (int i = 0; i < n; ++i) {
-        char symrepr[16];
-        symbol_to_csv_repr(syms[i].sym, symrepr, sizeof(symrepr));
-        double prob = total ? (double)syms[i].count / total : 0.0;
-        char codeword[64] = {0};
-        for (int b = 0; b < L; ++b)
-            codeword[b] = ((i >> (L - 1 - b)) & 1) ? '1' : '0';
-        codeword[L] = '\0';
-        fprintf(fcb, "\"%s\",%" PRIu64 ",%.7f,\"%s\"\n", symrepr, syms[i].count, prob, codeword);
-    }
-    fclose(fcb);
-
-    fin = fopen(in_fn, "rb");
-    if (!fin) { perror("fopen input again"); return 1; }
-    FILE *fenc = fopen(enc_fn, "wb");
-    if (!fenc) { perror("fopen encoded.bin"); fclose(fin); return 1; }
-    BitWriter *bw = bitwriter_open(fenc);
-
-    uint32_t map[256]; for (int i = 0; i < 256; ++i) map[i] = 0xFFFFFFFF;
-    for (int i = 0; i < n; ++i) map[syms[i].sym] = i;
-
-    while ((c = fgetc(fin)) != EOF) {
-        unsigned char uc = c;
-        uint32_t code = map[uc];
-        bitwriter_write_bits(bw, code, L);
-    }
-    bitwriter_write_bits(bw, eof_code, L);
-
-    bitwriter_close(bw);
-    fclose(fin);
-    fclose(fenc);
+    fclose(fout);
     return 0;
 }
