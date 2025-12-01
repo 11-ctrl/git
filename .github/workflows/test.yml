@@ -15,7 +15,7 @@ jobs:
       # 步驟 2: 編譯 C 語言程式
       # 使用 GCC 編譯 main.c，輸出名為 hello_c_app 的可執行檔
       - name: Compile encoder
-        run: gcc mini_prj_3_encoder_411286029.c -o encoder.exe
+        run: gcc mini_prj_3_encoder_411286029.c -o encoder.exe -lm
         
       # 步驟 3: 運行並驗證程式（直接執行程式）
       - name: Upload encoder
@@ -27,7 +27,7 @@ jobs:
       # 步驟 4: 上傳建置成品（可選）
       # 將編譯好的可執行檔儲存為 Artifact，供下載
       - name: Compile decoder
-        run: gcc mini_prj_3_decoder_411286029.c -o decoder.exe
+        run: gcc mini_prj_3_decoder_411286029.c -o decoder.exe -lm
 
       - name: Upload decoder
         uses: actions/upload-artifact@v4
