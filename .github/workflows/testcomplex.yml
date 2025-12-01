@@ -1,0 +1,66 @@
+name: C Build Simple
+# 觸發條件：當 push 程式碼到任何分支時
+on: [push]
+
+jobs:
+  build:
+    # 執行環境：使用預裝了 GCC 的最新 Ubuntu 虛擬機
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 步驟 1: 取得 repo 中的程式碼
+      - name: Checkout code
+        uses: actions/checkout@v4 
+        
+      # 步驟 2: 編譯 C 語言程式
+      # 使用 GCC 編譯 main.c，輸出名為 hello_c_app 的可執行檔
+      - name: Compile encoder
+        run: gcc mini_prj_3_encoder_411286010.c -o encoder.exe
+        
+      # 步驟 3: 運行並驗證程式（直接執行程式）
+      - name: Upload encoder
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoder-exe
+          path: encoder.exe
+        
+      # 步驟 4: 上傳建置成品（可選）
+      # 將編譯好的可執行檔儲存為 Artifact，供下載
+      - name: Compile decoder
+        run: gcc mini_prj_3_decoder_411286010.c -o decoder.exe
+
+      - name: Upload decoder
+        uses: actions/upload-artifact@v4
+        with:
+          name: decoder-exe
+          path: decoder.exe
+
+      - name: Download complex input (cano.txt)
+        run: curl -o test_input_complex.txt https://sherlock-holm.es/stories/plain-text/cano.txt
+
+      - name: Run encoder
+        run: ./encoder.exe test_input_complex.txt codebook.csv encoded.bin
+
+      - name: Upload encoded-simple.bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoded-complex
+          path: encoded.bin
+
+      - name: Upload codebook-simple.bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: codebook-complex
+          path: codebook.csv
+
+      - name: Run decoder
+        run: ./encoder.exe output.txt codebook.csv encoded.bin
+
+      - name: Upload output-simple.txt
+        uses: actions/upload-artifact@v4
+        with:
+          name: output-complex
+          path: output.txt
+
+      - name: Compare input and output
+        run: diff -a input.txt output.txt
