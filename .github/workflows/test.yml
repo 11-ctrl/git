@@ -60,4 +60,4 @@ jobs:
           path: output.txt
 
       - name: Compare input and output
-        run: diff input.txt output.txt
+        run: diff -a input.txt output.txt
